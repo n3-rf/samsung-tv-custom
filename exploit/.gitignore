@@ -1,0 +1,24 @@
+# Local operator material and generated artifacts
+/out/
+/inputs/
+/.venv/
+__pycache__/
+*.py[cod]
+*.img
+*.bin
+*.elf
+*.o
+*.ko
+*.wgt
+*.zip
+*.tar*
+*.log
+*.p12
+*.pfx
+*.pem
+*.key
+.env
+.env.*
+cmds.txt
+root_shell.log
+.DS_Store

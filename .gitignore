@@ -1,0 +1,27 @@
+# Firmware Samsung (4.8 Go)
+firmware/
+
+# Toolchain ARM (1.3 Go)
+exploit/arm-toolchain/
+
+# Build outputs exploit
+exploit/out/
+exploit/.venv/
+
+# Upstream git de l'exploit (renomme)
+exploit/.git_upstream/
+
+# Fichiers temporaires relay
+tools/shell.log
+tools/shell_cmds.txt
+
+# Token API TV (specifique a l'appareil)
+tools/token.txt
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Python
+__pycache__/
+*.pyc

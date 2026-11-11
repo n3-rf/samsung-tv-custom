@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns:tizen="http://tizen.org/ns/widgets" xmlns="http://www.w3.org/ns/widgets" id="https://tizentube.app" version="2.1.1" viewmodes="maximized">
+    <access origin="*" subdomains="true"></access>
+    <tizen:allow-navigation href="*"></tizen:allow-navigation>
+    <tizen:application id="xvvl3S1TT1.TizenTubeStandalone" package="xvvl3S1TT1" required_version="3.0"></tizen:application>
+    <author href="https://tizentube.app">Reis Can</author>
+    <content src="index.html"></content>
+    <feature name="http://tizen.org/feature/screen.size.all"></feature>
+    <feature name="http://tizen.org/feature/web.service"></feature>
+    <icon src="icon_16b9.png" width="1920" height="1080"></icon>
+    <icon src="icon.png" width="1024" height="1024"></icon>
+    <tizen:metadata key="http://samsung.com/tv/metadata/prelaunch.support" value="true"></tizen:metadata>
+    <tizen:metadata key="http://samsung.com/tv/metadata/floating.navigation" value="false"></tizen:metadata>
+    <tizen:metadata key="http://samsung.com/tv/metadata/use.game.mode" value="true"></tizen:metadata>
+    <tizen:metadata key="http://samsung.com/tv/metadata/use.uwe" value="true"></tizen:metadata>
+    <tizen:metadata key="http://samsung.com/tv/metadata/no_use_process_pool" value="true"></tizen:metadata>
+    <tizen:metadata key="multiview_support" value="true"></tizen:metadata>
+    <tizen:metadata key="multiview_min_resource" value="FHD+"></tizen:metadata>
+    <tizen:metadata key="http://samsung.com/tv/metadata/html5.4k.support" value="true"></tizen:metadata>
+    <tizen:metadata key="http://samsung.com/tv/metadata/prelaunch.support" value="true"></tizen:metadata>
+    <tizen:metadata key="http://samsung.com/tv/metadata/microphone.support" value="1"></tizen:metadata>
+    <tizen:metadata key="http://samsung.com/tv/metadata/microphone.area" value="open"></tizen:metadata>
+    <name>TizenTube</name>
+    <tizen:privilege name="http://tizen.org/privilege/internet"></tizen:privilege>
+    <tizen:privilege name="http://developer.samsung.com/privilege/network.public"></tizen:privilege>
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"></tizen:privilege>
+    <tizen:privilege name="http://tizen.org/privilege/recorder"></tizen:privilege>
+    <tizen:privilege name="http://tizen.org/privilege/mediacapture"></tizen:privilege>
+    <tizen:privilege name="http://tizen.org/privilege/unlimitedstorage"></tizen:privilege>
+    <tizen:privilege name="http://tizen.org/privilege/application.launch"></tizen:privilege>
+    <tizen:profile name="tv-samsung"></tizen:profile>
+    <tizen:service id="xvvl3S1TT1.StandaloneService">
+        <tizen:content src="service/dist/index.js"></tizen:content>
+        <tizen:name>StandaloneService</tizen:name>
+        <tizen:description>StandaloneService</tizen:description>
+    </tizen:service>
+    <tizen:setting screen-orientation="landscape" context-menu="enable" background-support="enable" encryption="disable" install-location="auto" hwkey-event="enable"></tizen:setting>
+</widget>

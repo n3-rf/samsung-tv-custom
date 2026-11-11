@@ -1,0 +1,287 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Kant-M2 persistent root installer.
+#
+# Run this on the TV from the USB reverse root shell. It writes the daemon and
+# a boot hook to the persistent /opt partition, starts the daemon, and prints
+# the per-install token. After the first installation the USB stick is no
+# longer needed: AT-HUB.service executes /opt/etc/parseinfo.sh at every boot,
+# and that script starts the daemon again.
+#
+# The generated bundle is produced by tools/build_persist_bundle.py, which
+# embeds persist/rootd.js in the heredoc below.
+set -u
+
+PREFIX=${KANT_PREFIX:-}
+ROOT="$PREFIX/opt/kant-root"
+HOOK="$PREFIX/opt/etc/parseinfo.sh"
+BACKUP="$HOOK.kant-orig"
+UNIT="$PREFIX/run/systemd/system/kant-rootd.service"
+NODE="$PREFIX/usr/bin/node"
+AT_HUB="$PREFIX/usr/lib/systemd/system/AT-HUB.service"
+MARK_BEGIN="# >>> kant-root >>>"
+MARK_END="# <<< kant-root <<<"
+
+BIND="0.0.0.0"
+PORT="5555"
+LABEL=""
+TOKEN=""
+NO_START=0
+FORCE=0
+QUIET=0
+
+usage() {
+    cat <<'EOF'
+Usage: install.sh [options]
+
+  --bind ADDRESS     listen address (default 0.0.0.0)
+  --port PORT        listen port (default 5555)
+  --label LABEL      optional SMACK label for commands (e.g. System::Privileged)
+  --token HEX64      reuse a token instead of generating one
+  --prefix DIR       install under DIR (offline tests only)
+  --no-start         install files but do not start the daemon
+  --force            skip firmware sanity checks
+  --quiet            print only the token and final status
+  --help             show this help
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --bind) [ $# -ge 2 ] || { echo "missing value for --bind" >&2; exit 2; }; BIND=$2; shift 2 ;;
+        --port) [ $# -ge 2 ] || { echo "missing value for --port" >&2; exit 2; }; PORT=$2; shift 2 ;;
+        --label) [ $# -ge 2 ] || { echo "missing value for --label" >&2; exit 2; }; LABEL=$2; shift 2 ;;
+        --token) [ $# -ge 2 ] || { echo "missing value for --token" >&2; exit 2; }; TOKEN=$2; shift 2 ;;
+        --prefix) [ $# -ge 2 ] || { echo "missing value for --prefix" >&2; exit 2; }; PREFIX=$2; shift 2 ;;
+        --no-start) NO_START=1; shift ;;
+        --force) FORCE=1; shift ;;
+        --quiet) QUIET=1; shift ;;
+        --help|-h) usage; exit 0 ;;
+        *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+ROOT="$PREFIX/opt/kant-root"
+HOOK="$PREFIX/opt/etc/parseinfo.sh"
+BACKUP="$HOOK.kant-orig"
+UNIT="$PREFIX/run/systemd/system/kant-rootd.service"
+NODE="$PREFIX/usr/bin/node"
+AT_HUB="$PREFIX/usr/lib/systemd/system/AT-HUB.service"
+
+if [ -z "$PREFIX" ] && [ "$(id -u)" != "0" ]; then
+    echo "install.sh must run as root on the TV" >&2
+    exit 1
+fi
+case "$PORT" in
+    ''|*[!0-9]*) echo "invalid port: $PORT" >&2; exit 2 ;;
+esac
+if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+    echo "invalid port: $PORT" >&2
+    exit 2
+fi
+case "$BIND" in
+    *[!A-Za-z0-9.:_-]*) echo "invalid bind address: $BIND" >&2; exit 2 ;;
+esac
+if [ -n "$LABEL" ]; then
+    case "$LABEL" in
+        *[!A-Za-z0-9_:./-]*) echo "invalid label: $LABEL" >&2; exit 2 ;;
+    esac
+fi
+
+if [ "$FORCE" != "1" ]; then
+    if [ ! -x "$NODE" ] && [ ! -x /usr/bin/node ]; then
+        echo "no /usr/bin/node on this firmware; persistence needs the signed Node runtime" >&2
+        exit 1
+    fi
+    if [ ! -f "$AT_HUB" ]; then
+        echo "AT-HUB.service not found; this firmware has no known boot-script hook" >&2
+        echo "investigate /usr/lib/systemd/system and re-run with --force only if you have another hook" >&2
+        exit 1
+    fi
+    if ! grep -q "/opt/etc/parseinfo.sh" "$AT_HUB"; then
+        echo "AT-HUB.service does not execute /opt/etc/parseinfo.sh; refusing to pretend to persist" >&2
+        exit 1
+    fi
+    if [ -s "$HOOK" ] && ! head -n 1 "$HOOK" | grep -q '^#!.*sh'; then
+        echo "$HOOK does not start with a shell shebang; refusing to append to an unknown file" >&2
+        echo "inspect it first, then re-run with --force if appending is safe" >&2
+        exit 1
+    fi
+fi
+
+mkdir -p "$ROOT" "$PREFIX/opt/etc" "$PREFIX/run/systemd/system" || exit 1
+chmod 700 "$ROOT" 2>/dev/null || true
+umask 077
+
+# --- daemon ---------------------------------------------------------------
+cat > "$ROOT/rootd.js" <<'KANT_ROOTD_JS_EOF'
+@@KANT_ROOTD@@
+KANT_ROOTD_JS_EOF
+chmod 700 "$ROOT/rootd.js" || exit 1
+
+# --- token ----------------------------------------------------------------
+if [ -n "$TOKEN" ]; then
+    case "$TOKEN" in
+        *[!0-9a-fA-F]*) echo "token must be 64 hexadecimal characters" >&2; exit 2 ;;
+    esac
+    if [ ${#TOKEN} -ne 64 ]; then
+        echo "token must be 64 hexadecimal characters" >&2
+        exit 2
+    fi
+    TOKEN=$(printf '%s' "$TOKEN" | tr 'A-F' 'a-f')
+elif [ -f "$ROOT/token" ]; then
+    TOKEN=$(tr -d ' \t\r\n' < "$ROOT/token")
+    case "$TOKEN" in
+        *[!0-9a-fA-F]*|'') TOKEN="" ;;
+    esac
+    if [ ${#TOKEN} -ne 64 ]; then TOKEN=""; fi
+fi
+if [ -z "$TOKEN" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+        TOKEN=$(openssl rand -hex 32 2>/dev/null)
+    fi
+    if [ -z "$TOKEN" ]; then
+        TOKEN=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \t\r\n')
+    fi
+    if [ ${#TOKEN} -ne 64 ]; then
+        echo "could not generate a 32-byte token" >&2
+        exit 1
+    fi
+fi
+printf '%s\n' "$TOKEN" > "$ROOT/token"
+chmod 600 "$ROOT/token" || exit 1
+
+# --- runtime environment --------------------------------------------------
+cat > "$ROOT/env" <<EOF
+KANT_ROOT_DIR='$ROOT'
+KANT_ROOT_TOKEN_FILE='$ROOT/token'
+KANT_ROOT_LOG='$ROOT/rootd.log'
+KANT_ROOT_BIND='$BIND'
+KANT_ROOT_PORT='$PORT'
+KANT_ROOT_LABEL='$LABEL'
+KANT_ROOT_PID='/tmp/kant-rootd.pid'
+KANT_ROOT_LOCK='/tmp/kant-rootd.lock'
+EOF
+chmod 600 "$ROOT/env" || exit 1
+
+# --- boot hook ------------------------------------------------------------
+cat > "$ROOT/boot.sh" <<'KANT_BOOT_EOF'
+#!/bin/sh
+# Started by AT-HUB.service through /opt/etc/parseinfo.sh at every boot.
+ROOT=${KANT_ROOT_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)}
+[ -n "$ROOT" ] || exit 0
+if [ -f "$ROOT/env" ]; then
+    set -a
+    . "$ROOT/env"
+    set +a
+fi
+NODE=${KANT_ROOT_NODE:-/usr/bin/node}
+UNIT_DIR=${KANT_UNIT_DIR:-/run/systemd/system}
+PID_FILE=${KANT_ROOT_PID:-/tmp/kant-rootd.pid}
+[ -x "$NODE" ] || exit 0
+[ -f "$ROOT/rootd.js" ] || exit 0
+umask 077
+
+# Prefer a volatile systemd unit so the daemon is supervised and restarted.
+mkdir -p "$UNIT_DIR" 2>/dev/null
+cat > "$UNIT_DIR/kant-rootd.service" <<EOF_UNIT
+[Unit]
+Description=Kant-M2 persistent root daemon
+After=local-fs.target
+ConditionPathExists=$ROOT/rootd.js
+
+[Service]
+Type=simple
+EnvironmentFile=$ROOT/env
+ExecStart=$NODE $ROOT/rootd.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF_UNIT
+if [ "$UNIT_DIR" = "/run/systemd/system" ] && [ "$(id -u)" = "0" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1
+    systemctl start kant-rootd.service >/dev/null 2>&1 && exit 0
+fi
+
+# Fallback when systemd is unavailable or refuses the transient unit.
+if [ -f "$PID_FILE" ]; then
+    old=$(cat "$PID_FILE" 2>/dev/null)
+    if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then exit 0; fi
+fi
+if command -v setsid >/dev/null 2>&1; then
+    setsid "$NODE" "$ROOT/rootd.js" </dev/null >>"$ROOT/rootd.out" 2>&1 &
+else
+    nohup "$NODE" "$ROOT/rootd.js" </dev/null >>"$ROOT/rootd.out" 2>&1 &
+fi
+exit 0
+KANT_BOOT_EOF
+chmod 700 "$ROOT/boot.sh" || exit 1
+
+# The vendor unit runs this script as root at every boot. Insert one block
+# right after the shebang, so a later "exit" in vendor code cannot skip it, and
+# preserve every existing line. The block is self-contained and cannot turn a
+# vendor "set -e" into an early exit.
+CREATED_HOOK=0
+if [ ! -f "$HOOK" ]; then
+    printf '#!/bin/sh\n' > "$HOOK"
+    CREATED_HOOK=1
+elif [ ! -s "$HOOK" ]; then
+    printf '#!/bin/sh\n' > "$HOOK"
+fi
+if [ "$CREATED_HOOK" = "1" ]; then
+    printf 'kant-root-created\n' > "$ROOT/hook-created"
+fi
+if ! grep -q "$MARK_BEGIN" "$HOOK"; then
+    [ -f "$BACKUP" ] || cp -p "$HOOK" "$BACKUP"
+    tmp="$HOOK.kant-install.$$"
+    {
+        head -n 1 "$HOOK"
+        printf '\n'
+        printf '%s\n' "$MARK_BEGIN"
+        printf '{ [ -x %s ] && %s >/dev/null 2>&1; } || true\n' "$ROOT/boot.sh" "$ROOT/boot.sh"
+        printf '%s\n' "$MARK_END"
+        tail -n +2 "$HOOK"
+    } > "$tmp" || { rm -f "$tmp"; exit 1; }
+    mv "$tmp" "$HOOK" || exit 1
+fi
+chmod 755 "$HOOK" || exit 1
+
+# --- start now ------------------------------------------------------------
+STARTED=0
+if [ "$NO_START" != "1" ]; then
+    sh "$ROOT/boot.sh" >/dev/null 2>&1 || true
+    i=0
+    while [ $i -lt 8 ]; do
+        if [ -f /tmp/kant-rootd.pid ]; then
+            pid=$(cat /tmp/kant-rootd.pid 2>/dev/null)
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then STARTED=1; break; fi
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+fi
+
+if [ "$QUIET" != "1" ]; then
+    echo "KANT-ROOT-INSTALL-OK"
+    echo "root:  $ROOT"
+    echo "hook:  $HOOK"
+    echo "bind:  $BIND"
+    echo "port:  $PORT"
+    [ -n "$LABEL" ] && echo "label: $LABEL"
+    if [ "$NO_START" = "1" ]; then
+        echo "start: skipped (--no-start)"
+    elif [ "$STARTED" = "1" ]; then
+        echo "start: running"
+    else
+        echo "start: pending; inspect $ROOT/rootd.log"
+        [ -f "$ROOT/rootd.log" ] && tail -n 10 "$ROOT/rootd.log"
+    fi
+    if [ "$BIND" != "127.0.0.1" ]; then
+        echo "warning: the daemon is reachable from the LAN and the protocol is not encrypted" >&2
+    fi
+fi
+echo "KANT-ROOT-TOKEN=$TOKEN"
+echo "KANT-ROOT-PORT=$PORT"
